@@ -25,6 +25,10 @@ enum Ranking {
     TwoPairs(u8, u8),
     ThreeOfAKind(u8),
     Straight(u8),
+    Flush,
+    FullHouse(u8, u8),
+    FourOfAKind(u8),
+    StraightFlush(u8),
 }
 
 use Ranking::*;
@@ -60,15 +64,29 @@ impl Hand {
 
     fn get_ranking(&self) -> Ranking {
         return self
-            .try_get_straight()
+            .try_get_flush()
+            .or_else(|| self.try_get_straight())
             .or_else(|| self.try_get_group_based_ranking())
             .unwrap_or(HighCard);
+    }
+
+    fn try_get_flush(&self) -> Option<Ranking> {
+        let suit = &self.0[0].suit;
+        if self.0.iter().all(|card| card.suit == *suit) {
+            if let Some(Straight(s)) = self.try_get_straight() {
+                Some(StraightFlush(s))
+            } else {
+                Some(Flush)
+            }
+        } else {
+            None
+        }
     }
 
     fn try_get_straight(&self) -> Option<Ranking> {
         fn find_straight(values: [u8; 5]) -> Option<u8> {
             if values.windows(2).all(|w| w[0] == w[1] + 1) {
-                return Some(values[0]);
+                Some(values[0])
             } else {
                 None
             }
@@ -81,6 +99,8 @@ impl Hand {
 
     fn try_get_group_based_ranking(&self) -> Option<Ranking> {
         match self.get_groups()[..] {
+            [(v, 4)] => Some(FourOfAKind(v)),
+            [(v1, 3), (v2, 2)] => Some(FullHouse(v1, v2)),
             [(v, 3)] => Some(ThreeOfAKind(v)),
             [(v1, 2), (v2, 2)] => Some(TwoPairs(v1, v2)),
             [(v, 2)] => Some(Pair(v)),
@@ -159,6 +179,12 @@ mod tests {
             "H3 H7 S8 S3 C3",
             "C14 C2 D3 D4 S5",
             "H4 S5 C8 H7 H6",
+            "D5 D8 D2 D12 D9",
+            "S5 C5 H5 S8 C8",
+            "S5 C5 H8 S8 C8",
+            "H4 S4 C4 D4 S9",
+            "H14 H2 H3 H4 H5",
+            "C14 C13 C12 C11 C10",
         ];
 
         for (i, hand) in hands.iter().enumerate() {
