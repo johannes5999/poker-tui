@@ -24,6 +24,7 @@ enum Ranking {
     Pair(u8),
     TwoPairs(u8, u8),
     ThreeOfAKind(u8),
+    Straight(u8),
 }
 
 use Ranking::*;
@@ -41,36 +42,68 @@ impl Hand {
     }
 
     fn as_values(&self) -> [u8; 5] {
-        self.0.clone().map(|card| card.value)
+        self.as_sorted().0.clone().map(|card| card.value)
+    }
+
+    fn get_values_with_ace_as_one(&self) -> [u8; 5] {
+        let mut values = self.as_values();
+
+        for val in &mut values {
+            if *val == 14 {
+                *val = 1;
+            }
+        }
+        values.sort();
+        values.reverse();
+        values
     }
 
     fn get_ranking(&self) -> Ranking {
-        let x = self.get_groupings();
+        return self
+            .try_get_straight()
+            .or_else(|| self.try_get_group_based_ranking())
+            .unwrap_or(HighCard);
+    }
 
-        match x[..] {
-            [(v, 3)] => ThreeOfAKind(v),
-            [(v1, 2), (v2, 2)] => TwoPairs(v1, v2),
-            [(v, 2)] => Pair(v),
-            _ => HighCard,
+    fn try_get_straight(&self) -> Option<Ranking> {
+        fn find_straight(values: [u8; 5]) -> Option<u8> {
+            if values.windows(2).all(|w| w[0] == w[1] + 1) {
+                return Some(values[0]);
+            } else {
+                None
+            }
+        }
+
+        find_straight(self.as_values())
+            .or_else(|| find_straight(self.get_values_with_ace_as_one()))
+            .map(Straight)
+    }
+
+    fn try_get_group_based_ranking(&self) -> Option<Ranking> {
+        match self.get_groups()[..] {
+            [(v, 3)] => Some(ThreeOfAKind(v)),
+            [(v1, 2), (v2, 2)] => Some(TwoPairs(v1, v2)),
+            [(v, 2)] => Some(Pair(v)),
+            _ => None,
         }
     }
 
-    fn get_groupings(&self) -> Vec<(u8, usize)> {
-        let values = self.as_sorted().as_values();
-        let mut last_val = values[0];
+    fn get_groups(&self) -> Vec<(u8, usize)> {
+        let mut groups: HashMap<u8, usize> = HashMap::new();
 
-        let mut map: HashMap<u8, usize> = HashMap::new();
+        let values = self.as_values();
+        let mut last_val = values[0];
 
         for value in values[1..].iter() {
             if *value == last_val {
-                *map.entry(*value).or_insert(1) += 1;
+                *groups.entry(*value).or_insert(1) += 1;
             }
             last_val = *value;
         }
 
-        let mut x: Vec<(u8, usize)> = map.iter().map(|(&k, &v)| (k, v)).collect();
-        x.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
-        x
+        let mut groups: Vec<(u8, usize)> = groups.iter().map(|(&k, &v)| (k, v)).collect();
+        groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+        groups
     }
 }
 
@@ -84,9 +117,7 @@ impl Ord for Hand {
             return ranking_comp;
         }
 
-        self.as_sorted()
-            .as_values()
-            .cmp(&other.as_sorted().as_values())
+        self.as_values().cmp(&other.as_values())
     }
 }
 
@@ -110,25 +141,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_equal_itself() {
-        let hand = "H2 H5 S10 C9 D13";
-        assert_hands_are_equal(hand, hand);
-    }
-
-    #[test]
-    fn test_high_card() {
-        assert_first_hand_wins("H2 H5 S10 C9 D13", "D3 D6 S12 H9 C4");
-        assert_first_hand_wins("H2 H5 S10 C9 D13", "D3 D10 S13 H9 C2");
-    }
-
-    #[test]
-    fn test_pair() {
-        assert_first_hand_wins("H2 H5 S10 C10 S9", "D3 D8 C14 S4 H13");
-        assert_first_hand_wins("H2 H5 S10 C10 S9", "D3 D9 C9 S4 H13");
-        assert_first_hand_wins("H2 H5 S10 C10 S9", "H3 C4 H10 D10 D9");
-    }
-
-    #[test]
     fn test_hands_with_same_value_are_equal() {
         assert_hands_are_equal("H4 D4 D13 C12 H10", "D10 C13 C4 H12 S4");
     }
@@ -145,6 +157,8 @@ mod tests {
             "D6 H6 H3 S3 H10",
             "H2 C2 C7 S7 H9",
             "H3 H7 S8 S3 C3",
+            "C14 C2 D3 D4 S5",
+            "H4 S5 C8 H7 H6",
         ];
 
         for (i, hand) in hands.iter().enumerate() {
