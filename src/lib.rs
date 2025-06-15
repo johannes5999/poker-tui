@@ -13,54 +13,89 @@ mod tests {
     }
 
     #[test]
-    fn should_win_blind_when_other_player_folds() {
+    fn should_fail_on_illegal_moves() {
+        let mut gs = GameState::init(2).unwrap();
+
+        assert!(gs.play_action(CallOrCheck).is_err());
+        assert!(gs.play_action(Fold).is_err());
+
+        gs.play_action(StartRound).unwrap();
+        assert!(gs.play_action(StartRound).is_err());
+    }
+
+    #[test]
+    fn should_start_and_deduct_blind() {
         let mut sut = TwoPlayerGameTestContainer::init();
 
-        sut.then_player_has_chips(0, 99);
-        sut.then_player_has_chips(1, 98);
+        sut.then_score_is(100, 100);
 
-        sut.when_player_plays(0, PokerAction::Fold);
+        sut.when_start_round();
+        sut.then_score_is(99, 98);
+    }
 
-        sut.then_player_has_chips(0, 99);
-        sut.then_player_has_chips(1, 101);
+    #[test]
+    fn should_win_blind_when_other_player_folds() {
+        let mut sut = TwoPlayerGameTestContainer::init();
+        sut.when_start_round();
+
+        sut.when_player_plays(0, Fold);
+        sut.then_score_is(99, 101);
+
+        sut.when_start_round();
+        sut.then_score_is(97, 100);
+
+        sut.when_player_plays(1, Fold);
+        sut.then_score_is(100, 100);
     }
 
     struct TwoPlayerGameTestContainer {
         gs: GameState,
+        actual_next_player: usize,
     }
 
     impl TwoPlayerGameTestContainer {
         fn init() -> TwoPlayerGameTestContainer {
             TwoPlayerGameTestContainer {
                 gs: GameState::init(2).unwrap(),
+                actual_next_player: 99,
             }
+        }
+
+        fn then_score_is(&self, p0_chips: u32, p1_chips: u32) {
+            self.then_player_has_chips(0, p0_chips);
+            self.then_player_has_chips(1, p1_chips);
         }
 
         fn then_player_has_chips(&self, player: usize, expected_chips: u32) {
             assert_eq!(self.gs.current_chips(player), expected_chips);
         }
 
-        fn when_player_plays(&mut self, player: u32, action: PokerAction) -> () {
-            self.gs = std::mem::replace(&mut self.gs, Self::empty_game_state()).play_action(action);
+        fn when_start_round(&mut self) -> () {
+            self.actual_next_player = self.gs.play_action(PokerAction::StartRound).unwrap();
         }
 
-        fn empty_game_state() -> GameState {
-            GameState {
-                player_chips: vec![],
-            }
+        fn when_player_plays(&mut self, player: usize, action: PokerAction) -> () {
+            assert_eq!(player, self.actual_next_player);
+            self.actual_next_player = self.gs.play_action(action).unwrap();
         }
     }
 }
 
 struct GameState {
     player_chips: Vec<u32>,
+    big_blind: usize,
+    next_player: usize,
+    is_round_started: bool,
 }
 
 impl GameState {
     fn init(players: usize) -> Option<Self> {
         if players > 1 {
             Some(GameState {
-                player_chips: vec![99, 98],
+                player_chips: vec![100, 100],
+                big_blind: 0,
+                next_player: 0,
+                is_round_started: false,
             })
         } else {
             None
@@ -71,137 +106,45 @@ impl GameState {
         self.player_chips[player]
     }
 
-    fn play_action(self, action: PokerAction) -> Self {
-        let mut player_chips = self.player_chips;
-        player_chips[1] = 101;
-        GameState { player_chips }
-    }
-}
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-
-struct Game {
-    player: u32,
-    chips: HashMap<u32, u32>,
-    pot: u32,
-}
-impl Game {
-    fn new() -> Self {
-        Self {
-            player: 0,
-            chips: HashMap::new(),
-            pot: 0,
+    fn play_action(&mut self, action: PokerAction) -> Result<usize, ()> {
+        match action {
+            PokerAction::CallOrCheck => {
+                return Err(());
+            }
+            PokerAction::Fold => {
+                if !self.is_round_started {
+                    return Err(());
+                }
+                self.player_chips[self.big_blind] += 3;
+                self.is_round_started = false;
+            }
+            PokerAction::StartRound => {
+                if self.is_round_started {
+                    return Err(());
+                }
+                self.is_round_started = true;
+                self.big_blind = self.next_big_blind();
+                let small = self.small_blind();
+                self.next_player = small;
+                self.player_chips[self.big_blind] -= 2;
+                self.player_chips[small] -= 1;
+            }
         }
+
+        Ok(self.next_player)
     }
 
-    fn register_player(self, player: &impl Player) -> (Self, u32) {
-        let mut chips = self.chips;
-        chips.insert(self.player, 100);
-        (
-            Self {
-                player: self.player + 1,
-                chips,
-                ..self
-            },
-            self.player,
-        )
+    fn small_blind(&self) -> usize {
+        (self.big_blind + 1) % 2
     }
 
-    fn play_step(self) -> Self {
-        self.put_chips_in_pot(0, 2).put_chips_in_pot(1, 1)
-    }
-
-    fn put_chips_in_pot(self, player: u32, amount: u32) -> Self {
-        let mut chips = self.chips;
-        chips.insert(player, chips.get(&player).unwrap() - amount);
-        Self {
-            chips,
-            pot: self.pot + amount,
-            ..self
-        }
-    }
-    fn current_chips(&self, pid: &u32) -> u32 {
-        *self.chips.get(pid).unwrap()
-    }
-
-    fn play_round(self) -> Self {
-        let mut chips = self.chips;
-        chips.insert(0, chips.get(&0).unwrap() + self.pot);
-        Self {
-            chips,
-            pot: 0,
-            ..self
-        }
+    fn next_big_blind(&self) -> usize {
+        (self.big_blind + 1) % 2
     }
 }
 
 pub enum PokerAction {
     CallOrCheck,
     Fold,
-}
-
-pub trait Player {
-    fn do_play() -> PokerAction;
-}
-
-#[cfg(test)]
-mod tests2 {
-    use super::*;
-
-    #[test]
-    fn should_win_blind_when_other_player_folds() {
-        let player1 = AlwaysCallingPlayer {};
-        let player2 = AlwaysFoldingPlayer {};
-        let (game, player1id) = Game::new().register_player(&player1);
-        let (game, player2id) = game.register_player(&player2);
-
-        assert_ne!(player1id, player2id);
-        assert_eq!(game.current_chips(&player1id), 100);
-        assert_eq!(game.current_chips(&player2id), 100);
-
-        let game = game.play_step();
-
-        assert_eq!(game.current_chips(&player1id), 98);
-        assert_eq!(game.current_chips(&player2id), 99);
-
-        let game = game.play_round();
-
-        assert_eq!(game.current_chips(&player1id), 101);
-        assert_eq!(game.current_chips(&player2id), 99);
-    }
-
-    #[test]
-    fn should_not_play_if_less_than_two_players() {}
-
-    use PokerAction::*;
-
-    struct AlwaysCallingPlayer {}
-
-    impl Player for AlwaysCallingPlayer {
-        fn do_play() -> PokerAction {
-            CallOrCheck
-        }
-    }
-
-    struct AlwaysFoldingPlayer {}
-
-    impl Player for AlwaysFoldingPlayer {
-        fn do_play() -> PokerAction {
-            Fold
-        }
-    }
+    StartRound,
 }
