@@ -92,7 +92,27 @@ mod two_player_tests {
         let mut sut = TwoPlayerGameTestContainer::init(3);
 
         sut.when_start_round();
-        sut.then_score_is(&[100, 99, 98])
+        sut.then_score_is(&[100, 99, 98]);
+
+        sut.when_player_plays(0, Fold);
+        sut.when_player_plays(1, Fold);
+
+        sut.then_score_is(&[100, 99, 101]);
+    }
+
+    #[test]
+    fn should_allow_one_player_to_fold() {
+        let mut sut = TwoPlayerGameTestContainer::init(3);
+        sut.when_start_round();
+        sut.when_player_plays(0, CallOrCheck);
+        sut.when_player_plays(1, Fold);
+        sut.when_player_plays(2, CallOrCheck);
+        sut.then_score_is(&[98, 99, 98]);
+
+        sut.when_player_plays(0, CallOrCheck);
+        sut.when_player_plays(2, Raise(2));
+        sut.when_player_plays(0, Fold);
+        sut.then_score_is(&[98, 99, 103]);
     }
 
     struct TwoPlayerGameTestContainer {
@@ -187,7 +207,8 @@ struct TurnState {
     current_player: usize,
     big_blind: usize,
     is_round_started: bool,
-    total_players: usize,
+    players: usize,
+    active_players: Vec<bool>,
 }
 
 impl TurnState {
@@ -196,29 +217,40 @@ impl TurnState {
             current_player: 0,
             big_blind: players - 2,
             is_round_started: false,
-            total_players: players,
+            players,
+            active_players: vec![true; players],
         }
     }
 
     fn advance_player(&mut self) {
-        self.current_player = (self.current_player + 1) % 2;
+        self.current_player = (self.current_player + 1) % self.players;
+        while !self.active_players[self.current_player] {
+            self.advance_player();
+        }
+    }
+
+    fn fold_current_player(&mut self) -> bool {
+        self.active_players[self.current_player] = false;
+        self.advance_player();
+        self.active_players.iter().filter(|&&a| a).count() == 1
     }
 
     fn start_new_round(&mut self) {
         self.is_round_started = true;
         self.big_blind = self.next_big_blind();
-        self.current_player = self.small_blind();
+        self.current_player = (self.big_blind + 1) % self.players;
+        self.active_players = vec![true; self.players];
     }
     fn small_blind(&self) -> usize {
         if self.big_blind == 0 {
-            self.total_players - 1
+            self.players - 1
         } else {
-            (self.big_blind - 1) % self.total_players
+            (self.big_blind - 1) % self.players
         }
     }
 
     fn next_big_blind(&self) -> usize {
-        (self.big_blind + 1) % self.total_players
+        (self.big_blind + 1) % self.players
     }
 
     fn is_action_valid(&self, action: &PokerAction) -> bool {
@@ -262,9 +294,10 @@ impl GameState {
                 self.turn_state.advance_player();
             }
             PokerAction::Fold => {
-                self.chips_state
-                    .win_pot((self.turn_state.current_player + 1) % 2);
-                self.turn_state.is_round_started = false;
+                if self.turn_state.fold_current_player() {
+                    self.chips_state.win_pot(self.turn_state.current_player);
+                    self.turn_state.is_round_started = false;
+                }
             }
             PokerAction::Raise(amount) => {
                 if amount < 1 || amount > 99 {
