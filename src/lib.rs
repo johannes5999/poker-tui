@@ -1,7 +1,7 @@
 pub mod core_engine;
 
 #[cfg(test)]
-mod tests {
+mod two_player_tests {
     use super::*;
     use PokerAction::*;
 
@@ -34,51 +34,65 @@ mod tests {
 
     #[test]
     fn should_start_and_deduct_blind() {
-        let mut sut = TwoPlayerGameTestContainer::init();
+        let mut sut = TwoPlayerGameTestContainer::init(2);
 
-        sut.then_score_is(100, 100);
+        sut.then_score_is(&[100, 100]);
 
         sut.when_start_round();
-        sut.then_score_is(99, 98);
+        sut.then_score_is(&[99, 98]);
     }
 
     #[test]
     fn should_win_blind_when_other_player_folds() {
-        let mut sut = TwoPlayerGameTestContainer::init();
+        let mut sut = TwoPlayerGameTestContainer::init(2);
         sut.when_start_round();
 
         sut.when_player_plays(0, Fold);
-        sut.then_score_is(99, 101);
+        sut.then_score_is(&[99, 101]);
 
         sut.when_start_round();
-        sut.then_score_is(97, 100);
+        sut.then_score_is(&[97, 100]);
 
         sut.when_player_plays(1, Fold);
-        sut.then_score_is(100, 100);
+        sut.then_score_is(&[100, 100]);
     }
 
     #[test]
     fn should_win_blind_if_raise_then_fold() {
-        let mut sut = TwoPlayerGameTestContainer::init();
+        let mut sut = TwoPlayerGameTestContainer::init(2);
         sut.when_start_round();
 
         sut.when_player_plays(0, CallOrCheck);
-        sut.then_score_is(98, 98);
+        sut.then_score_is(&[98, 98]);
 
-        sut.when_player_plays(1, Fold);
-        sut.then_score_is(102, 98);
+        sut.when_player_plays(1, Raise(2));
+        sut.when_player_plays(0, Fold);
+
+        sut.then_score_is(&[98, 102]);
     }
 
     #[test]
     fn should_win_more_after_raise_is_called() {
-        let mut sut = TwoPlayerGameTestContainer::init();
+        let mut sut = TwoPlayerGameTestContainer::init(2);
         sut.when_start_round();
 
         sut.when_player_plays(0, Raise(9));
-        sut.then_score_is(90, 98);
+        sut.then_score_is(&[90, 98]);
 
         sut.when_player_plays(1, CallOrCheck);
-        sut.then_score_is(90, 90);
+        sut.then_score_is(&[90, 90]);
+
+        sut.when_player_plays(0, Raise(10));
+        sut.when_player_plays(1, Fold);
+        sut.then_score_is(&[110, 90]);
+    }
+
+    #[test]
+    fn should_win_blind_three_players() {
+        let mut sut = TwoPlayerGameTestContainer::init(3);
+
+        sut.when_start_round();
+        sut.then_score_is(&[100, 99, 98])
     }
 
     struct TwoPlayerGameTestContainer {
@@ -87,16 +101,17 @@ mod tests {
     }
 
     impl TwoPlayerGameTestContainer {
-        fn init() -> TwoPlayerGameTestContainer {
+        fn init(players: usize) -> TwoPlayerGameTestContainer {
             TwoPlayerGameTestContainer {
-                gs: GameState::init(2).unwrap(),
+                gs: GameState::init(players).unwrap(),
                 actual_next_player: 99,
             }
         }
 
-        fn then_score_is(&self, p0_chips: u32, p1_chips: u32) {
-            self.then_player_has_chips(0, p0_chips);
-            self.then_player_has_chips(1, p1_chips);
+        fn then_score_is(&self, expected: &[u32]) {
+            for (player, score) in expected.iter().enumerate() {
+                self.then_player_has_chips(player, *score);
+            }
         }
 
         fn then_player_has_chips(&self, player: usize, expected_chips: u32) {
@@ -179,7 +194,7 @@ impl TurnState {
     fn init(players: usize) -> Self {
         Self {
             current_player: 0,
-            big_blind: 0,
+            big_blind: players - 2,
             is_round_started: false,
             total_players: players,
         }
@@ -195,11 +210,15 @@ impl TurnState {
         self.current_player = self.small_blind();
     }
     fn small_blind(&self) -> usize {
-        (self.big_blind + 1) % 2
+        if self.big_blind == 0 {
+            self.total_players - 1
+        } else {
+            (self.big_blind - 1) % self.total_players
+        }
     }
 
     fn next_big_blind(&self) -> usize {
-        (self.big_blind + 1) % 2
+        (self.big_blind + 1) % self.total_players
     }
 
     fn is_action_valid(&self, action: &PokerAction) -> bool {
@@ -211,34 +230,28 @@ impl TurnState {
     }
 }
 
-struct GameState {
+pub struct GameState {
     chips_state: ChipsState,
     turn_state: TurnState,
-    big_blind: usize,
-    next_player: usize,
-    is_round_started: bool,
 }
 
 impl GameState {
-    fn init(players: usize) -> Option<Self> {
+    pub fn init(players: usize) -> Option<Self> {
         if players > 1 {
             Some(GameState {
                 chips_state: ChipsState::init(players),
                 turn_state: TurnState::init(players),
-                big_blind: 0,
-                next_player: 0,
-                is_round_started: false,
             })
         } else {
             None
         }
     }
 
-    fn current_chips(&self, player: usize) -> u32 {
+    pub fn current_chips(&self, player: usize) -> u32 {
         self.chips_state.current_chips(player)
     }
 
-    fn play_action(&mut self, action: PokerAction) -> Result<usize, ()> {
+    pub fn play_action(&mut self, action: PokerAction) -> Result<usize, ()> {
         if !self.turn_state.is_action_valid(&action) {
             return Err(());
         }
@@ -268,10 +281,6 @@ impl GameState {
         }
 
         Ok(self.turn_state.current_player)
-    }
-
-    fn is_valid_action_at_current_time(&self, action: &PokerAction) -> bool {
-        self.turn_state.is_action_valid(action)
     }
 
     fn bet_blinds(&mut self) {
