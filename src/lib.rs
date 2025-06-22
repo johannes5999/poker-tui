@@ -1,5 +1,186 @@
 pub mod core_engine;
 
+pub struct GameState {
+    chips_state: ChipsState,
+    turn_state: TurnState,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum PokerAction {
+    CallOrCheck,
+    Fold,
+    Raise(u32),
+    StartRound,
+}
+
+impl GameState {
+    pub fn init(players: usize) -> Option<Self> {
+        if players > 1 {
+            Some(GameState {
+                chips_state: ChipsState::init(players),
+                turn_state: TurnState::init(players),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn current_chips(&self, player: usize) -> u32 {
+        self.chips_state.current_chips(player)
+    }
+
+    pub fn play_action(&mut self, action: PokerAction) -> Result<usize, ()> {
+        if !self.turn_state.is_action_valid(&action) {
+            return Err(());
+        }
+
+        match action {
+            PokerAction::CallOrCheck => {
+                self.chips_state.call(self.turn_state.current_player);
+                self.turn_state.advance_player();
+            }
+            PokerAction::Fold => {
+                if self.turn_state.fold_current_player() {
+                    self.chips_state.win_pot(self.turn_state.current_player);
+                    self.turn_state.is_round_started = false;
+                }
+            }
+            PokerAction::Raise(amount) => {
+                if amount < 1 || amount > 99 {
+                    return Err(());
+                }
+                self.chips_state
+                    .bet_chips(self.turn_state.current_player, amount);
+                self.turn_state.advance_player();
+            }
+            PokerAction::StartRound => {
+                self.turn_state.start_new_round();
+                self.bet_blinds();
+            }
+        }
+
+        Ok(self.turn_state.current_player)
+    }
+
+    fn bet_blinds(&mut self) {
+        self.chips_state.bet_chips(self.turn_state.big_blind, 2);
+        self.chips_state.bet_chips(self.turn_state.small_blind(), 1);
+    }
+}
+
+struct ChipsState {
+    player_chips: Vec<PlayerChips>,
+    pot: u32,
+}
+
+#[derive(Clone)]
+struct PlayerChips {
+    stack: u32,
+    bet: u32,
+}
+
+impl ChipsState {
+    fn init(players: usize) -> Self {
+        Self {
+            player_chips: vec![PlayerChips { stack: 100, bet: 0 }; players],
+            pot: 0,
+        }
+    }
+
+    fn bet_chips(&mut self, player: usize, amount: u32) {
+        self.player_chips[player].stack -= amount;
+        self.player_chips[player].bet += amount;
+    }
+
+    fn win_pot(&mut self, player: usize) {
+        self.move_chips_to_pot();
+        self.gain_chips(player, self.pot);
+        self.pot = 0;
+    }
+
+    fn gain_chips(&mut self, player: usize, amount: u32) {
+        self.player_chips[player].stack += amount
+    }
+
+    fn call(&mut self, player: usize) {
+        self.bet_chips(player, self.highest_bet() - self.player_chips[player].bet)
+    }
+
+    fn move_chips_to_pot(&mut self) {
+        for pc in &mut self.player_chips {
+            self.pot += pc.bet;
+            pc.bet = 0;
+        }
+    }
+
+    fn highest_bet(&self) -> u32 {
+        self.player_chips.iter().map(|pc| pc.bet).max().unwrap()
+    }
+
+    fn current_chips(&self, player: usize) -> u32 {
+        self.player_chips[player].stack
+    }
+}
+
+struct TurnState {
+    current_player: usize,
+    big_blind: usize,
+    is_round_started: bool,
+    players: usize,
+    active_players: Vec<bool>,
+}
+
+impl TurnState {
+    fn init(players: usize) -> Self {
+        Self {
+            current_player: 0,
+            big_blind: players - 2,
+            is_round_started: false,
+            players,
+            active_players: vec![true; players],
+        }
+    }
+
+    fn advance_player(&mut self) {
+        self.current_player = (self.current_player + 1) % self.players;
+        while !self.active_players[self.current_player] {
+            self.advance_player();
+        }
+    }
+
+    fn fold_current_player(&mut self) -> bool {
+        self.active_players[self.current_player] = false;
+        self.advance_player();
+        self.active_players.iter().filter(|&&a| a).count() == 1
+    }
+
+    fn start_new_round(&mut self) {
+        self.is_round_started = true;
+        self.big_blind = self.next_big_blind();
+        self.current_player = (self.big_blind + 1) % self.players;
+        self.active_players = vec![true; self.players];
+    }
+    fn small_blind(&self) -> usize {
+        if self.big_blind == 0 {
+            self.players - 1
+        } else {
+            (self.big_blind - 1) % self.players
+        }
+    }
+
+    fn next_big_blind(&self) -> usize {
+        (self.big_blind + 1) % self.players
+    }
+
+    fn is_action_valid(&self, action: &PokerAction) -> bool {
+        if self.is_round_started {
+            action != &PokerAction::StartRound
+        } else {
+            action == &PokerAction::StartRound
+        }
+    }
+}
+
 #[cfg(test)]
 mod two_player_tests {
     use super::*;
@@ -147,185 +328,4 @@ mod two_player_tests {
             self.actual_next_player = self.gs.play_action(action).unwrap();
         }
     }
-}
-
-#[derive(Clone)]
-struct PlayerChips {
-    stack: u32,
-    bet: u32,
-}
-
-struct ChipsState {
-    player_chips: Vec<PlayerChips>,
-    pot: u32,
-}
-
-impl ChipsState {
-    fn init(players: usize) -> Self {
-        Self {
-            player_chips: vec![PlayerChips { stack: 100, bet: 0 }; players],
-            pot: 0,
-        }
-    }
-
-    fn bet_chips(&mut self, player: usize, amount: u32) {
-        self.player_chips[player].stack -= amount;
-        self.player_chips[player].bet += amount;
-    }
-
-    fn win_pot(&mut self, player: usize) {
-        self.move_chips_to_pot();
-        self.gain_chips(player, self.pot);
-        self.pot = 0;
-    }
-
-    fn gain_chips(&mut self, player: usize, amount: u32) {
-        self.player_chips[player].stack += amount
-    }
-
-    fn call(&mut self, player: usize) {
-        self.bet_chips(player, self.highest_bet() - self.player_chips[player].bet)
-    }
-
-    fn move_chips_to_pot(&mut self) {
-        for pc in &mut self.player_chips {
-            self.pot += pc.bet;
-            pc.bet = 0;
-        }
-    }
-
-    fn highest_bet(&self) -> u32 {
-        self.player_chips.iter().map(|pc| pc.bet).max().unwrap()
-    }
-
-    fn current_chips(&self, player: usize) -> u32 {
-        self.player_chips[player].stack
-    }
-}
-
-struct TurnState {
-    current_player: usize,
-    big_blind: usize,
-    is_round_started: bool,
-    players: usize,
-    active_players: Vec<bool>,
-}
-
-impl TurnState {
-    fn init(players: usize) -> Self {
-        Self {
-            current_player: 0,
-            big_blind: players - 2,
-            is_round_started: false,
-            players,
-            active_players: vec![true; players],
-        }
-    }
-
-    fn advance_player(&mut self) {
-        self.current_player = (self.current_player + 1) % self.players;
-        while !self.active_players[self.current_player] {
-            self.advance_player();
-        }
-    }
-
-    fn fold_current_player(&mut self) -> bool {
-        self.active_players[self.current_player] = false;
-        self.advance_player();
-        self.active_players.iter().filter(|&&a| a).count() == 1
-    }
-
-    fn start_new_round(&mut self) {
-        self.is_round_started = true;
-        self.big_blind = self.next_big_blind();
-        self.current_player = (self.big_blind + 1) % self.players;
-        self.active_players = vec![true; self.players];
-    }
-    fn small_blind(&self) -> usize {
-        if self.big_blind == 0 {
-            self.players - 1
-        } else {
-            (self.big_blind - 1) % self.players
-        }
-    }
-
-    fn next_big_blind(&self) -> usize {
-        (self.big_blind + 1) % self.players
-    }
-
-    fn is_action_valid(&self, action: &PokerAction) -> bool {
-        if self.is_round_started {
-            action != &PokerAction::StartRound
-        } else {
-            action == &PokerAction::StartRound
-        }
-    }
-}
-
-pub struct GameState {
-    chips_state: ChipsState,
-    turn_state: TurnState,
-}
-
-impl GameState {
-    pub fn init(players: usize) -> Option<Self> {
-        if players > 1 {
-            Some(GameState {
-                chips_state: ChipsState::init(players),
-                turn_state: TurnState::init(players),
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn current_chips(&self, player: usize) -> u32 {
-        self.chips_state.current_chips(player)
-    }
-
-    pub fn play_action(&mut self, action: PokerAction) -> Result<usize, ()> {
-        if !self.turn_state.is_action_valid(&action) {
-            return Err(());
-        }
-
-        match action {
-            PokerAction::CallOrCheck => {
-                self.chips_state.call(self.turn_state.current_player);
-                self.turn_state.advance_player();
-            }
-            PokerAction::Fold => {
-                if self.turn_state.fold_current_player() {
-                    self.chips_state.win_pot(self.turn_state.current_player);
-                    self.turn_state.is_round_started = false;
-                }
-            }
-            PokerAction::Raise(amount) => {
-                if amount < 1 || amount > 99 {
-                    return Err(());
-                }
-                self.chips_state
-                    .bet_chips(self.turn_state.current_player, amount);
-                self.turn_state.advance_player();
-            }
-            PokerAction::StartRound => {
-                self.turn_state.start_new_round();
-                self.bet_blinds();
-            }
-        }
-
-        Ok(self.turn_state.current_player)
-    }
-
-    fn bet_blinds(&mut self) {
-        self.chips_state.bet_chips(self.turn_state.big_blind, 2);
-        self.chips_state.bet_chips(self.turn_state.small_blind(), 1);
-    }
-}
-
-#[derive(PartialEq, Eq)]
-pub enum PokerAction {
-    CallOrCheck,
-    Fold,
-    Raise(u32),
-    StartRound,
 }
