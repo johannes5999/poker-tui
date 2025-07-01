@@ -8,10 +8,31 @@ pub enum Suit {
     Clubs,
 }
 
+use Suit::*;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Card {
     pub suit: Suit,
     pub value: u8,
+}
+
+impl TryFrom<&str> for Card {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let suit = value.chars().next().ok_or(())?;
+
+        let suit = match suit {
+            'H' => Hearts,
+            'S' => Spades,
+            'D' => Diamonds,
+            'C' => Clubs,
+            _ => Err(())?,
+        };
+
+        let value: u8 = value[1..].parse().unwrap();
+        Ok(Card { suit, value })
+    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -151,9 +172,25 @@ impl PartialEq for Hand {
 
 impl Eq for Hand {}
 
+pub trait DeckGenerator {
+    fn shuffle(&mut self) -> Deck;
+}
+pub struct Deck {
+    cards: Vec<Card>,
+}
+
+impl Deck {
+    pub fn init(cards: Vec<Card>) -> Self {
+        Self { cards }
+    }
+
+    pub fn draw(self) -> (Card, Self) {
+        let mut cards = self.cards;
+        (cards.pop().unwrap(), Deck { cards })
+    }
+}
 #[cfg(test)]
 mod tests {
-    use super::Suit::*;
     use super::*;
 
     #[test]
@@ -223,17 +260,6 @@ mod tests {
     }
 
     fn create_card(card_as_str: &str) -> Card {
-        let suit = card_as_str.chars().next();
-
-        let suit = match suit.expect("can't make a card from an empty string") {
-            'H' => Hearts,
-            'S' => Spades,
-            'D' => Diamonds,
-            'C' => Clubs,
-            _ => panic!("Not a valid suit"),
-        };
-
-        let value: u8 = card_as_str[1..].parse().expect("Not a valid number");
-        Card { suit, value }
+        Card::try_from(card_as_str).unwrap()
     }
 }
