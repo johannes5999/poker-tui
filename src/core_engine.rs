@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashMap};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Suit {
     Hearts,
     Spades,
@@ -10,7 +10,7 @@ pub enum Suit {
 
 use Suit::*;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Card {
     pub suit: Suit,
     pub value: u8,
@@ -184,9 +184,26 @@ impl Deck {
         Self { cards }
     }
 
-    pub fn draw(self) -> (Card, Self) {
-        let mut cards = self.cards;
-        (cards.pop().unwrap(), Deck { cards })
+    pub fn draw(&mut self) -> Card {
+        self.cards.pop().unwrap()
+    }
+
+    pub fn draw_multiple(&mut self, count: usize) -> Vec<Card> {
+        let mut cards = self.cards.split_off(self.cards.len() - count);
+        cards.reverse();
+        cards
+    }
+
+    pub fn ordered_deck() -> Self {
+        let mut cards = Vec::with_capacity(52);
+
+        for suit in [Clubs, Diamonds, Hearts, Spades] {
+            for value in (2..=14).rev() {
+                cards.push(Card { suit, value });
+            }
+        }
+
+        Self::init(cards)
     }
 }
 #[cfg(test)]
