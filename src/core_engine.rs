@@ -1,3 +1,4 @@
+use rand::{prelude::*, rng};
 use std::{cmp::Ordering, collections::HashMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +33,27 @@ impl TryFrom<&str> for Card {
 
         let value: u8 = value[1..].parse().unwrap();
         Ok(Card { suit, value })
+    }
+}
+
+impl Card {
+    pub fn pretty_print(&self) -> String {
+        let suit = match self.suit {
+            Hearts => "♥️",
+            Spades => "♠️",
+            Diamonds => "♦️",
+            Clubs => "♣️",
+        };
+
+        let val = match self.value {
+            14 => "A",
+            13 => "K",
+            12 => "Q",
+            11 => "J",
+            v => &v.to_string(),
+        };
+
+        return suit.to_string() + val;
     }
 }
 
@@ -203,6 +225,13 @@ impl Deck {
             }
         }
 
+        Self::init(cards)
+    }
+
+    pub fn shuffled_deck() -> Self {
+        let deck = Self::ordered_deck();
+        let mut cards = deck.cards;
+        cards.shuffle(&mut rng());
         Self::init(cards)
     }
 }
