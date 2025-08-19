@@ -1,4 +1,8 @@
-use poker_tui::{core_engine::Deck, GameState, PokerAction, PokerAction::*};
+use poker_tui::{
+    core_engine::Deck,
+    GameState,
+    PokerAction::{self, *},
+};
 use std::io;
 
 fn main() {
@@ -46,9 +50,12 @@ fn play_hand(gs: GameState) -> GameState {
 
         match action {
             Some(a) => {
-                println!("{}", pretty_print_action(&a, cur));
+                print!("{}", pretty_print_action(&a, cur));
                 match hs.play_action(a) {
-                    Ok(poker_tui::TurnResult::NextPlayer(p)) => cur = p,
+                    Ok(poker_tui::TurnResult::NextPlayer(p)) => {
+                        println!(" They have {} chips left", hs.current_chips(cur));
+                        cur = p
+                    }
                     Ok(poker_tui::TurnResult::WonHand(p)) => {
                         println!("Player {} won the round", p);
                         return gs.apply_played_hand(hs);
@@ -75,8 +82,8 @@ fn parse_action(as_str: &str) -> Option<PokerAction> {
 
 fn pretty_print_action(action: &PokerAction, player: usize) -> String {
     match action {
-        CallOrCheck => format!("Player {player} called or checked"),
+        CallOrCheck => format!("Player {player} called or checked."),
         Fold => format!("Player {player} folded"),
-        Raise(v) => format!("Player {player} raised by {v} chips"),
+        Raise(v) => format!("Player {player} raised by {v} chips."),
     }
 }
