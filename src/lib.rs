@@ -11,7 +11,7 @@ pub struct GameState {
     players: usize,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PokerAction {
     CallOrCheck,
     Fold,
@@ -106,38 +106,57 @@ impl HandState {
 
     pub fn play_action(&mut self, action: PokerAction) -> Result<TurnResult, RaiseByTooMuch> {
         match action {
-            PokerAction::CallOrCheck => {
-                self.chips.call(self.turn.current_player);
-                if self.turn.advance_player() {
-                    if self.turn.rounds > 3 {
-                        let win = self.get_winning_player();
-                        self.chips.win_pot(win);
-                        return Ok(WonHand(win));
-                    }
-
-                    if self.turn.rounds == 1 {
-                        self.board.extend(self.deck.draw_multiple(3));
-                    } else {
-                        self.board.push(self.deck.draw());
-                    }
-                }
-            }
-            PokerAction::Fold => {
-                if self.turn.fold_current_player() {
-                    self.chips.win_pot(self.turn.current_player);
-                    return Ok(WonHand(0));
-                }
-            }
+            PokerAction::CallOrCheck => self.chips.call(self.turn.current_player),
+            PokerAction::Fold => self.turn.fold_current_player(),
             PokerAction::Raise(amount) => {
                 if amount < 1 || amount > 99 {
                     return Err(RaiseByTooMuch());
                 }
                 self.chips.bet_chips(self.turn.current_player, amount);
-                self.turn.advance_player_raise();
+                self.turn.reset_action_counter();
             }
         }
 
-        Ok(NextPlayer(self.turn.current_player))
+        self.advance_player();
+
+        Ok(self.get_turn_result())
+    }
+
+    fn get_turn_result(&mut self) -> TurnResult {
+        if let Some(w) = self.try_get_winner() {
+            self.chips.win_pot(w);
+            WonHand(w)
+        } else {
+            NextPlayer(self.turn.current_player)
+        }
+    }
+
+    fn try_get_winner(&mut self) -> Option<usize> {
+        self.turn
+            .try_get_last_player()
+            .or_else(|| self.try_get_hand_winner())
+    }
+
+    fn draw_board(&mut self) {
+        if self.turn.rounds == 1 {
+            self.board.extend(self.deck.draw_multiple(3));
+        } else if let 2 | 3 = self.turn.rounds {
+            self.board.push(self.deck.draw());
+        }
+    }
+
+    fn try_get_hand_winner(&self) -> Option<usize> {
+        if self.turn.rounds > 3 {
+            let win = self.get_winning_player();
+            return Some(win);
+        }
+        None
+    }
+
+    fn advance_player(&mut self) {
+        if self.turn.advance_player() {
+            self.draw_board();
+        }
     }
 
     fn get_winning_player(&self) -> usize {
@@ -274,9 +293,8 @@ impl TurnState {
         }
     }
 
-    fn advance_player_raise(&mut self) {
+    fn reset_action_counter(&mut self) {
         self.turns_since_action = 0;
-        self.advance_player();
     }
 
     fn advance_player(&mut self) -> bool {
@@ -303,9 +321,19 @@ impl TurnState {
         self.turns_since_action == self.players
     }
 
-    fn fold_current_player(&mut self) -> bool {
+    fn fold_current_player(&mut self) {
         self.active_players[self.current_player] = false;
-        self.advance_player();
+    }
+
+    fn try_get_last_player(&self) -> Option<usize> {
+        if self.all_but_one_folded() {
+            self.active_players.iter().position(|a| *a)
+        } else {
+            None
+        }
+    }
+
+    fn all_but_one_folded(&self) -> bool {
         self.active_players.iter().filter(|&&a| a).count() == 1
     }
 }
@@ -489,20 +517,47 @@ mod two_player_tests {
 
     #[test]
     fn should_compare_hands_multiple_rounds() {
-        const P1_WINS_HAND: &[&str; 3] = &["H13 D13", "H2 D7", "C8 C4 H3 S12 S10"];
-        const P2_WINS_HAND: &[&str; 3] = &["H2 D7", "H13 D13", "C8 C4 H3 S12 S10"];
+        const P0_WINS_HAND: &[&str; 3] = &["H13 D13", "H2 D7", "C8 C4 H3 S12 S10"];
+        const P1_WINS_HAND: &[&str; 3] = &["H2 D7", "H13 D13", "C8 C4 H3 S12 S10"];
 
         let mut sut = GameTestContainer::init(2);
-        sut.when_start_round_with_deck(deck_from_strings(P1_WINS_HAND));
+        sut.when_start_round_with_deck(deck_from_strings(P0_WINS_HAND));
 
         sut.when_call_until_player_wins(0);
         sut.then_score_is(&[102, 98]);
 
-        sut.when_start_round_with_deck(deck_from_strings(P2_WINS_HAND));
+        sut.when_start_round_with_deck(deck_from_strings(P1_WINS_HAND));
         sut.when_player_plays(1, Raise(9));
         sut.when_call_until_player_wins(1);
 
         sut.then_score_is(&[92, 108]);
+    }
+
+    #[test]
+    fn should_finish_when_end_on_a_fold() {
+        const P1_WINS_HAND: &[&str; 4] = &["D12 S7", "H8 C9", "H2 D7", "C8 C4 H3 S12 S9"];
+
+        let mut sut = GameTestContainer::init(3);
+        sut.when_start_round_with_deck(deck_from_strings(P1_WINS_HAND));
+
+        sut.when_play_multi(CallOrCheck, 3 * 3);
+        sut.when_player_plays(0, Raise(3));
+        sut.when_player_plays(1, CallOrCheck);
+        sut.when_player_plays(2, Fold);
+
+        sut.then_score_is(&[95, 107, 98]);
+    }
+
+    #[test]
+    fn should_advance_when_end_on_fold() {
+        let mut sut = GameTestContainer::init(3);
+        sut.when_start_round();
+
+        sut.when_player_plays(0, Raise(10));
+        sut.when_player_plays(1, CallOrCheck);
+        sut.when_player_plays(2, Fold);
+
+        assert_eq!(sut.hs.unwrap().get_board().len(), 3);
     }
 
     struct GameTestContainer {
@@ -558,6 +613,12 @@ mod two_player_tests {
                     self.gs = self.gs.apply_played_hand(x.unwrap());
                     self.actual_next_player = None
                 }
+            }
+        }
+
+        fn when_play_multi(&mut self, action: PokerAction, count: u32) -> () {
+            for _ in 0..count {
+                self.when_player_plays(self.actual_next_player.unwrap(), action);
             }
         }
 
