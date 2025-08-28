@@ -92,16 +92,12 @@ impl HandState {
         self.chips.bet_chips(small_blind, 1);
     }
 
-    pub fn current_chips(&self, player: usize) -> u32 {
-        self.chips.current_chips(player)
-    }
-
-    pub fn get_hand(&self, player: usize) -> (Card, Card) {
-        self.hands[player].clone()
-    }
-
-    pub fn get_board(&self) -> Vec<Card> {
-        self.board.clone()
+    fn get_hand(&self, player: usize) -> HandVisibility {
+        if self.turn.active_players[player] {
+            HandVisibility::Visible(self.hands[player].0, self.hands[player].1)
+        } else {
+            HandVisibility::Folded
+        }
     }
 
     pub fn play_action(&mut self, action: PokerAction) -> Result<TurnResult, RaiseByTooMuch> {
@@ -156,6 +152,7 @@ impl HandState {
     fn advance_player(&mut self) {
         if self.turn.advance_player() {
             self.draw_board();
+            self.chips.move_chips_to_pot();
         }
     }
 
@@ -176,6 +173,34 @@ impl HandState {
             self.board[4],
         ])
     }
+
+    pub fn spectator_snapshot(&self) -> HandSnapshot {
+        HandSnapshot {
+            board: self.board.clone(),
+            hands: (0..self.players).map(|i| self.get_hand(i)).collect(),
+            chips: self.chips.player_chips.clone(),
+            pot: self.chips.pot,
+            current_player: self.turn.current_player,
+            expected_call: self.chips.expected_call(self.turn.current_player),
+            players: self.players,
+        }
+    }
+}
+
+pub struct HandSnapshot {
+    pub board: Vec<Card>,
+    pub hands: Vec<HandVisibility>,
+    pub chips: Vec<PlayerChips>,
+    pub pot: u32,
+    pub current_player: usize,
+    pub expected_call: u32,
+    pub players: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum HandVisibility {
+    Visible(Card, Card),
+    Folded,
 }
 
 fn best_hand_from_cards(cards: [Card; 7]) -> Hand {
@@ -220,9 +245,9 @@ struct ChipsState {
 }
 
 #[derive(Clone)]
-struct PlayerChips {
-    stack: u32,
-    bet: u32,
+pub struct PlayerChips {
+    pub stack: u32,
+    pub bet: u32,
 }
 
 impl ChipsState {
@@ -252,7 +277,11 @@ impl ChipsState {
     }
 
     fn call(&mut self, player: usize) {
-        self.bet_chips(player, self.highest_bet() - self.player_chips[player].bet)
+        self.bet_chips(player, self.expected_call(player))
+    }
+
+    fn expected_call(&self, player: usize) -> u32 {
+        self.highest_bet() - self.player_chips[player].bet
     }
 
     fn move_chips_to_pot(&mut self) {
@@ -264,10 +293,6 @@ impl ChipsState {
 
     fn highest_bet(&self) -> u32 {
         self.player_chips.iter().map(|pc| pc.bet).max().unwrap()
-    }
-
-    fn current_chips(&self, player: usize) -> u32 {
-        self.player_chips[player].stack
     }
 }
 
@@ -339,7 +364,7 @@ impl TurnState {
 }
 
 #[cfg(test)]
-mod two_player_tests {
+mod tests {
     use crate::core_engine::*;
 
     use super::*;
@@ -472,26 +497,75 @@ mod two_player_tests {
         let expected_boards: Vec<&str> = vec!["", "H2 H3 H4", "H2 H3 H4 H5", "H2 H3 H4 H5 H6"];
 
         for board in expected_boards {
-            assert_hands_are_correct(&hs);
-            assert_eq!(hs.get_board(), to_cards(&board));
+            let snap = hs.spectator_snapshot();
+            assert_hands_are_correct(&snap);
+            assert_eq!(snap.board, to_cards(&board));
 
             hs.play_action(CallOrCheck).unwrap();
             hs.play_action(CallOrCheck).unwrap();
         }
     }
 
-    fn assert_hands_are_correct(hs: &HandState) {
+    fn assert_hands_are_correct(snap: &HandSnapshot) {
         assert_eq!(
-            hs.get_hand(0),
-            (Card::try_from("D2").unwrap(), Card::try_from("D7").unwrap())
+            snap.hands[0],
+            HandVisibility::Visible(Card::try_from("D2").unwrap(), Card::try_from("D7").unwrap())
         );
         assert_eq!(
-            hs.get_hand(1),
-            (
+            snap.hands[1],
+            HandVisibility::Visible(
                 Card::try_from("S14").unwrap(),
                 Card::try_from("C10").unwrap()
             )
         );
+    }
+
+    #[test]
+    fn should_show_stuff_in_snapshot() {
+        const P1_WINS_HAND: &[&str; 3] = &["H2 D7", "H13 D13", "C8 C4 H3 S12 S10"];
+        let mut sut = GameTestContainer::init(2);
+        sut.when_start_round_with_deck(deck_from_strings(P1_WINS_HAND));
+
+        let snap = sut.take_snapshot();
+        assert_eq!(snap.chips[0].bet, 1);
+        assert_eq!(snap.chips[1].bet, 2);
+        assert_eq!(snap.pot, 0);
+        assert_eq!(snap.current_player, 0);
+        assert_eq!(snap.expected_call, 1);
+        assert_eq!(snap.players, 2);
+
+        sut.when_player_plays(0, CallOrCheck);
+        sut.when_player_plays(1, CallOrCheck);
+
+        sut.when_player_plays(0, Raise(2));
+
+        let snap = sut.take_snapshot();
+        assert_eq!(snap.chips[0].bet, 2);
+        assert_eq!(snap.chips[1].bet, 0);
+        assert_eq!(snap.pot, 4);
+        assert_eq!(snap.current_player, 1);
+        assert_eq!(snap.expected_call, 2);
+    }
+
+    #[test]
+    fn should_show_folded_hands_in_snapshot() {
+        const DECK: &[&str; 4] = &["H2 D7", "H13 D13", "S4 D2", "C8 C4 H3 S12 S10"];
+        let mut sut = GameTestContainer::init(3);
+        sut.when_start_round_with_deck(deck_from_strings(DECK));
+
+        sut.when_player_plays(0, Fold);
+        println!("{}", sut.hs.is_none());
+
+        let expected = vec![
+            HandVisibility::Folded,
+            HandVisibility::Visible(
+                Card::try_from("H13").unwrap(),
+                Card::try_from("D13").unwrap(),
+            ),
+            HandVisibility::Visible(Card::try_from("S4").unwrap(), Card::try_from("D2").unwrap()),
+        ];
+
+        assert_eq!(expected, sut.take_snapshot().hands);
     }
 
     #[test]
@@ -557,7 +631,7 @@ mod two_player_tests {
         sut.when_player_plays(1, CallOrCheck);
         sut.when_player_plays(2, Fold);
 
-        assert_eq!(sut.hs.unwrap().get_board().len(), 3);
+        assert_eq!(sut.take_snapshot().board.len(), 3);
     }
 
     struct GameTestContainer {
@@ -585,7 +659,7 @@ mod two_player_tests {
             let actual_chips = self
                 .hs
                 .as_ref()
-                .map(|c| c.current_chips(player))
+                .map(|c| c.spectator_snapshot().chips[player].stack)
                 .unwrap_or(self.gs.current_chips(player));
             assert_eq!(actual_chips, expected_chips);
         }
@@ -633,6 +707,10 @@ mod two_player_tests {
                 }
             }
             assert!(false, "round didn't finish after 100 checks");
+        }
+
+        fn take_snapshot(&self) -> HandSnapshot {
+            self.hs.as_ref().unwrap().spectator_snapshot()
         }
     }
 
